@@ -73,13 +73,15 @@ sub push_job {
 
 # Removes a job item to the named queue and returns it
 sub pop_job {
-  my ($self, $queue, $job) = @_;
-  $self->redis->lpop($self->queue($queue), decode_json($job));
+  my ($self, $queue) = @_;
+  my $p = $self->redis->lpop($self->queue($queue));
+  return $p ? decode_json ($p) : undef;
 }
 
 # Returns the jobs from the queue
 sub peek {
   my ($self, $queue, $start, $count) = @_;
+  $count ||= 1;
   my @jobs=();
   if ($count == 1) {
     push @jobs,$self->redis->lindex($self->queue($queue), $start||0);
@@ -111,6 +113,32 @@ sub watch_queue {
   $self->redis->sadd($self->key("queues"), $self->queue($name));
 }
 
+# Drops the queue and all jobs in it.
+sub drop_queue {
+  my ($self, $queue) = @_;
+  my $name = $self->queue($queue);
+  $self->{watched_queues} ||= {};
+  delete $self->{watched_queues}{$name};
+  $self->redis->srem($self->key("queues"), $self->queue($name));
+  $self->redis->del($name);
+}
+
+# Drops all subordinate keys for the given key names
+sub drop_keys {
+  my ($self, @names) = @_;
+  my @k = $self->redis->keys($self->key(@names,"*"));
+  foreach (@k) {
+    print "killing $_\n";
+    $self->redis->del($_);
+  }
+}
+
+# Seriously, will drop the entire queue data
+sub drop_all {
+  my ($self) = @_;
+  $self->drop_keys();
+}
+
 # Enqueues a job in Resque-standard format
 sub enqueue {
   my ($self, $obj, @args) = @_;
@@ -129,6 +157,17 @@ sub dequeue {
 sub reserve {
   my ($self, $queue) = @_;
   $self->{reserve} = $self->dequeue($queue);
+}
+
+# Appends message to log file
+sub logger {
+  my ($self, $process, @msg) = @_;
+  my $logrec = join("\t", time(), $process, @msg);
+  my $logfile = $self->{logfile} || "$process.log";
+  open(my $lh, ">>", $logfile);
+  return print $lh "$logrec\n" unless $lh;
+  print $lh "$logrec\n";
+  close $lh;
 }
 
 # Preloaded methods go here.

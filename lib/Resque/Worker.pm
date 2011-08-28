@@ -31,17 +31,23 @@ our @EXPORT = qw(
 our $VERSION = '0.01';
 
 my $hostname;
-my %workers={};
+my %workers=();
 my $to_s;
 
 sub new {
   my ($class, %config) = @_;
-  my $self = new Resque(
+  my $self = $config{resque} || new Resque(
     verbose=>0, queues=>$ENV{QUEUES}||'*', state=>'idle',
     %config);
   bless $self, $class;
   $self->register_worker();
   $self;
+}
+
+# Removes a non-processing worker data
+sub destroy {
+  my ($self) = @_;
+  $self->unregister_worker();
 }
 
 sub hostname {
@@ -57,14 +63,19 @@ sub to_s {
 
 sub register_worker {
   my ($self) = @_;
+  $self->prune_dead_workers();
   $workers{$self->to_s} = $self;
-  $self->redis->sadd($self->resque->key($self->to_s));
+  $self->redis->sadd($self->key($self->to_s), $self->to_s);
+  $self->redis->set($self->key('processed', $self->to_s), '0');
+  $self->redis->set($self->key('worker', $self->to_s, 'started'), time);
 }
 
 sub unregister_worker {
   my ($self) = @_;
   delete $workers{$self->to_s};
-  $self->redis->sadd($self->resque->key($self->to_s));
+  $self->redis->del($self->key('worker', $self->to_s, 'started'));
+  $self->redis->del($self->key('processed', $self->to_s));
+  $self->redis->srem($self->key($self->to_s), $self->to_s);
 }
 
 # Returns the next job from the subscribed queues
@@ -94,6 +105,8 @@ sub prune_dead_workers {
     my ($pid) = $w =~ /:(\d+):/;
     my $wps = `ps -o pid,state -p $pid`;
     $self->redis->srem($self->key('workers'), $w) unless $wps;
+    $self->redis->del($self->key('worker', $w, 'started'));
+    $self->redis->del($self->key('processed', $w));
   }
 }
 
@@ -130,8 +143,8 @@ sub register_signal_handlers {
   };
 }
 
-sub worker {
-  my ($self, $queues, $callback) = @_;
+sub work {
+  my ($self) = @_;
   $self->redis->sadd($self->key('workers'), $self->to_s);
   $self->redis->set($self->key('stat', 'processed', $self->to_s), "0");
   $self->register_signal_handlers();
@@ -140,17 +153,17 @@ sub worker {
     if (!$self->paused && $self->reserve()) {
       $self->working_on();
       $self->{child} = fork();
-      $self->shutdown("Fork failed!") unless $self->{child};
+      $self->shutdown("Fork failed!") unless defined $self->{child};
 
       if ($self->{child} == 0) { # Child!
         srand;
-        my $rc = &$callback(@{$self->{job}{args}});
+        my $rc = &$self->{job}->perform();
         $self->status('processed');
         exit $rc;
       } 
       else { # Me, $self->{child} is the child pid
         my $cpid = wait();
-        blwarn("Lost my child! Sad Master") if $cpid == -1;
+        $self->logger("Lost my child! Sad Parent!") if $cpid == -1;
       }
       $self->{child} = 0;
       $self->done_working();
@@ -257,12 +270,7 @@ sub vlog {
 # Appends message to log file
 sub logger {
   my ($self, @msg) = @_;
-  my $logrec = join("\t", time(), $self->to_s(), @msg);
-  my $logfile = $self->{logfile} || $self->to_s().'.log';
-  open(my $lh, ">>", $logfile);
-  return print $lh "$logrec\n" unless $lh;
-  print $lh "$logrec\n";
-  close $lh;
+  Resque::logger($self, $self->to_s(), @msg);
 }
 
 
