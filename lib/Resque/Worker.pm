@@ -81,11 +81,8 @@ sub unregister_worker {
 sub reserve {
   my ($self) = @_;
   my @q = $self->{queues} eq '*' ? sort $self->queues() : split(',',$self->{queues});
-  print join(' ', @q), "= queues\n";
   foreach (@q) {
-    print "q: $_\n";
     $self->{job} = Resque::Job::reserve($self, $_);
-    print $self->{job}, " in $_\n" if $self->{job};
     return $self->{job} if $self->{job};
   }
 }
@@ -111,8 +108,8 @@ sub prune_dead_workers {
 # Increments the named status count for the worker and system
 sub status {
   my ($self, $name) = @_;
-  $self->redis->incby($self->key('stat', $name), 1);
-  $self->redis->incby($self->key('stat', $self->to_s, $name), 1);
+  $self->redis->incrby($self->key('stat', $name), 1);
+  $self->redis->incrby($self->key('stat', $self->to_s, $name), 1);
 }
 
 # Signals: QUIT=exit, TERM=kill child & exit, USR1=kill child & continue, USR2=Pause, CONT=Unpause
@@ -141,28 +138,35 @@ sub register_signal_handlers {
 #   };
 }
 
+sub unregister_signal_handlers {
+  my ($self) = @_;
+  delete $SIG{INT};
+  delete $SIG{TERM};
+  delete $SIG{QUIT};
+  delete $SIG{USR1};
+  delete $SIG{USR2};
+  delete $SIG{CONT};
+ #delete $SIG{__DIE__};
+}
+
 sub work {
   my ($self) = @_;
   $self->redis->sadd($self->key('workers'), $self->to_s);
   $self->redis->set($self->key('stat', 'processed', $self->to_s), "0");
   $self->register_signal_handlers();
-  print "starting\n";
 
   while(!$self->shutdown_requested) {
-    print "loop\n";
-    print "paused\n" if $self->paused;
     if (!$self->paused && $self->reserve()) {
-      print "job: $self->{job}{class}\n";
       my $rc;
       $self->working_on();
       $self->{child} = fork();
       $self->shutdown("Fork failed!") unless defined $self->{child};
 
       if ($self->{child} == 0) { # Child!
-        print "child $$\n";
         srand;
-        if ($self->{process}) {
-          $rc = &{$self->{callback}}($self->job->args());
+        # Send job to a configired callback, or let the job do it.
+        if ($self->{callback}) {
+          $rc = &{$self->{callback}}($self->{job}->args());
         } else {
           $rc = $self->{job}->perform();
         }
@@ -170,25 +174,53 @@ sub work {
         exit $rc;
       } 
       else { # Me, $self->{child} is the child pid
-        print "waiting for  $self->{child}\n";
         my $cpid = wait();
-        print "joined with $$self->{child} $cpid\n";
         $self->logger("Lost my child! Sad Parent!") if $cpid == -1;
       }
       $self->{child} = 0;
       $self->done_working();
     } 
     elsif ($self->{shutdown_on_empty}) {
-        $self->shutdown();
+      $self->shutdown();
     } 
     else {
-      print "sleeping...\n";
       sleep($self->{interval} || 5);
     }
-    print "shutdown_requested\n" if $self->shutdown_requested;
   }
+}
 
-  print "stopping\n";
+# Log Process Worker: reads base:logs:logname and writes lines to given logname
+sub log_processor {
+  my ($self) = @_;
+  $self->redis->sadd($self->key('workers'), $self->to_s);
+  $self->redis->set($self->key('stat', 'processed', $self->to_s), "0");
+  $self->register_signal_handlers();
+  
+  while(!$self->shutdown_requested) {
+    my @logs = $self->available_logs();
+    if (!$self->paused && scalar(@logs)) {
+      my $clog = '';
+      my ($lh, $rec);
+      foreach my $l (@logs) {
+        my ($lname) = $l =~ /^.+?:log:(.+)/;
+        while (!$self->paused && ($rec = $self->pop_log_rec($l))) {
+          if ($clog ne $lname) {
+            $clog = $lname;
+            close $lh if $lh;
+            open $lh, '>>', $lname;
+          }
+          print $lh "$rec\n" if $lh;
+        }
+        close $lh if $lh;
+      }
+    }
+    elsif ($self->{shutdown_on_empty}) {
+      $self->shutdown();
+    } 
+    else {
+      sleep($self->{interval} || 5);
+    }
+  }
   $self->redis->srem($self->key('workers'), $self->to_s);
   $self->redis->del($self->key('stat', 'processed', $self->to_s));
 }
@@ -214,8 +246,8 @@ sub fail_job {
     payload=>$job, exception=>$exception, worker=>$self->to_s,
     failed_at=>Resque::now()});
   $self->redis->rpush("resque:failed", $v);
-  $self->redis->incby("resque:stat:failed:$self->{worker}", 1);
-  $self->redis->incby("resque:stat:failed", 1);
+  $self->redis->incrby("resque:stat:failed:$self->{worker}", 1);
+  $self->redis->incrby("resque:stat:failed", 1);
 }
 
 sub retry_queue {

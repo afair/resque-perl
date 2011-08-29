@@ -91,7 +91,6 @@ sub destroy {
 sub reserve {
   my ($resque, $queue) = @_;
   my $payload = $resque->pop_queue($queue);
-  print "$queue pl:", $payload||'none', "\n";
   return undef unless $payload;
   new Resque::Job($queue, $payload, resque=>$resque);
 }
@@ -105,8 +104,10 @@ sub perform {
   my $job_was_performed = 0;
   my $result;
   eval {
-    $result = &{"$self->{class}::perform"}($self->args);
+    no strict 'refs';
+    $result = &{"$self->{job}{class}::perform"}($self->args);
     $job_was_performed = 1;
+    use strict;
   };
   if ($@) { # Failure
     $self->fail($@);

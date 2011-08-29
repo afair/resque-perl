@@ -5,6 +5,7 @@ use strict;
 use warnings;
 
 use Redis;
+use Resque::Worker;
 use JSON::XS;
 
 require Exporter;
@@ -72,6 +73,11 @@ sub key {
   "$self->{namespace}:$name";
 }
 
+sub keys {
+  my ($self, @names) = @_;
+  $self->redis->keys($self->key(@names,"*"));
+}
+
 sub queue {
   my ($self, $name) = @_;
   $self->key("queue", $name);
@@ -88,6 +94,21 @@ sub push_queue {
 sub pop_queue {
   my ($self, $queue) = @_;
   $self->redis->lpop($self->queue($queue));
+}
+
+sub available_logs {
+  my ($self) = @_;
+  $self->keys('logs');
+}
+
+sub push_log_rec {
+  my ($self, $file, $rec) = @_;
+  $self->redis->rpush($self->key('log', $file), $rec);
+}
+
+sub pop_log_rec {
+  my ($self, $log_key) = @_;
+  $self->redis->lpop($log_key);
 }
 
 # Returns the jobs from the queue
@@ -138,9 +159,10 @@ sub drop_queue {
 # Drops all subordinate keys for the given key names
 sub drop_keys {
   my ($self, @names) = @_;
-  my @k = $self->redis->keys($self->key(@names,"*"));
+  my @k = $self->keys();
+  #$self->redis->del(@k); # Doesn't take multiple keys like the redis does
   foreach (@k) {
-    print "deleting key $_\n";
+    #print "deleting key $_\n";
     $self->redis->del($_);
   }
 }
@@ -180,6 +202,8 @@ sub now {
 sub logger {
   my ($self, $process, @msg) = @_;
   my $logrec = join("\t", now(), $process, @msg);
+  return print "$logrec\n" if $self->{test};
+
   my $logfile = $self->{logfile} || $ENV{RESQUE_LOG} || "$process.log";
   open(my $lh, ">>", $logfile);
   return print $lh "$logrec\n" unless $lh;
