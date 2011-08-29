@@ -65,17 +65,16 @@ sub queue {
 }
 
 # Adds a job item to the named queue
-sub push_job {
-  my ($self, $queue, $job) = @_;
+sub push_queue {
+  my ($self, $queue, $message) = @_;
   $self->watch_queue($queue);
-  $self->redis->rpush($self->queue($queue), encode_json($job));
+  $self->redis->rpush($self->queue($queue), $message);
 }
 
 # Removes a job item to the named queue and returns it
-sub pop_job {
+sub pop_queue {
   my ($self, $queue) = @_;
-  my $p = $self->redis->lpop($self->queue($queue));
-  return $p ? decode_json ($p) : undef;
+  $self->redis->lpop($self->queue($queue));
 }
 
 # Returns the jobs from the queue
@@ -89,7 +88,7 @@ sub peek {
   else {
     @jobs = $self->redis->lrange($self->queue($queue), $start||0, $count||1);
   }
-  @jobs = map { decode_json($_) } @jobs;
+  #@jobs = map { decode_json($_) } @jobs;
   @jobs;
 }
 
@@ -159,10 +158,15 @@ sub reserve {
   $self->{reserve} = $self->dequeue($queue);
 }
 
+sub now {
+  my ($sec,$min,$hour,$mday,$mon,$year,$wday, $yday,$isdst)=localtime(time);
+  sprintf "%4d-%02d-%02d %02d:%02d:%02d", $year+1900,$mon+1,$mday,$hour,$min,$sec;
+}
+
 # Appends message to log file
 sub logger {
   my ($self, $process, @msg) = @_;
-  my $logrec = join("\t", time(), $process, @msg);
+  my $logrec = join("\t", now(), $process, @msg);
   my $logfile = $self->{logfile} || "$process.log";
   open(my $lh, ">>", $logfile);
   return print $lh "$logrec\n" unless $lh;

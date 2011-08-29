@@ -51,7 +51,7 @@ sub job_string {
 sub create {
   my ($resque, $klass, @args) = @_;
   return perform($klass, @args) if $resque->inline;
-  $resque->push_job({class=>$klass, args=>\@args});
+  $resque->push_queue(encode_json({class=>$klass, args=>\@args}));
 }
 
 # Removes all matching jobs from the queue, returns number of destroyed jobs
@@ -74,7 +74,7 @@ sub destroy {
 # Returns a job instance from the queue, or undef if none available
 sub reserve {
   my ($resque, $queue) = @_;
-  my $payload = $resque->redis->pop_job($queue);
+  my $payload = $resque->redis->pop_queue($queue);
   return undef unless $payload;
   new Resque::Job($queue, $payload);
 }

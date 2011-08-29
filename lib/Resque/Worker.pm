@@ -65,17 +65,17 @@ sub register_worker {
   my ($self) = @_;
   $self->prune_dead_workers();
   $workers{$self->to_s} = $self;
-  $self->redis->sadd($self->key($self->to_s), $self->to_s);
+  $self->redis->sadd($self->key('workers'), $self->to_s);
   $self->redis->set($self->key('processed', $self->to_s), '0');
-  $self->redis->set($self->key('worker', $self->to_s, 'started'), time);
+  $self->redis->set($self->key('worker', $self->to_s, 'started'), $self->now());
 }
 
 sub unregister_worker {
   my ($self) = @_;
   delete $workers{$self->to_s};
-  $self->redis->del($self->key('worker', $self->to_s, 'started'));
+  $self->drop_keys('worker', $self->to_s);
   $self->redis->del($self->key('processed', $self->to_s));
-  $self->redis->srem($self->key($self->to_s), $self->to_s);
+  $self->redis->srem($self->key('workers'), $self->to_s);
 }
 
 # Returns the next job from the subscribed queues
@@ -83,12 +83,8 @@ sub reserve {
   my ($self) = @_;
   my @q = $self->{queues} eq '*' ? sort $self->queues() : split(',',$self->{queues});
   foreach (@q) {
-    $self->{job} = $self->pop_job($_);
-    if ($self->{job}) {
-      $self->{payload} = encode_json($self->{job});
-      $self->{reserve_queue} = $_;
-      return $self->{job};
-    }
+    $self->{job} = Resque::Job::reserve($self, $_);
+    return $self->{job} if $self->{job};
   }
 }
 
@@ -113,8 +109,8 @@ sub prune_dead_workers {
 # Increments the named status count for the worker and system
 sub status {
   my ($self, $name) = @_;
-  $self->redis->incby($self->key('stat', $name));
-  $self->redis->incby($self->key('stat', $name, $self->to_s));
+  $self->redis->incby($self->key('stat', $name), 1);
+  $self->redis->incby($self->key('stat', $self->to_s, $name), 1);
 }
 
 # Signals: QUIT=exit, TERM=kill child & exit, USR1=kill child & continue, USR2=Pause, CONT=Unpause
@@ -176,26 +172,26 @@ sub work {
   $self->redis->del($self->key('stat', 'processed', $self->to_s));
 }
 
+# Updates base:worker:id to current job
 sub working_on {
   my ($self, $job) = @_;
   $job ||= $self->{job};
-  my $v = encode_json({queue=>$self->{queue}, run_at=>BmUtil::currentTimestamp(),
-    payload=>$job});
-  $self->redis->set("resque:worker:$$", $v);
+  my $v = {queue=>$self->{queue}, run_at=>Resque::now(), payload=>$job};
+  $self->redis->set($self->key('worker',$self->to_s), encode_json($v));
 }
 
 sub done_working {
   my ($self) = @_;
-  $self->redis->del("worker:$$");
+  $self->redis->del($self->key('worker',$self->to_s));
 }
 
 # Call when job failed.
 sub fail_job {
-  my ($self) = @_;
+  my ($self, $exception) = @_;
   my $job ||= $self->{job};
-  my $v = JSON::encode_json({queue=>$self->{queue}, run_at=>BmUtil::currentTimestamp(),
-    payload=>$job, exception=>BmUtil::stackTrace(), worker=>$self->{worker},
-    failed_at=>BmUtil::currentTimestamp()});
+  my $v = JSON::encode_json({queue=>$self->{queue}, run_at=>Resque::now(),
+    payload=>$job, exception=>$exception, worker=>$self->to_s,
+    failed_at=>Resque::now()});
   $self->redis->rpush("resque:failed", $v);
   $self->redis->incby("resque:stat:failed:$self->{worker}", 1);
   $self->redis->incby("resque:stat:failed", 1);

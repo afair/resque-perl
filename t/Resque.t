@@ -7,6 +7,7 @@
 
 use strict;
 use warnings;
+use lib './lib';
 
 package ResqueTestJob;
 sub process { 
@@ -29,27 +30,30 @@ use Data::Dumper;
 # Insert your test code below, the Test::More module is use()ed here so read
 # its man page ( perldoc Test::More ) for help writing this test script.
 
-my ($r,$j,$p, @j, @w, $w);
+my ($r,$j,$p, @j, @w, $w,$m, $n);
 
 # Test Resque
 ok $r = new Resque(namespace=>'test');
 $r->drop_all();
 ok $r->queue('test'), "test:queue:test";
-ok $r->push_job('test', {class=>'Resque', args=>[]});
-@j =  Dumper( $r->peek('test'));
+ok $r->push_queue('test', 'message');
+@j = $r->peek('test');
 ok scalar(@j), 1;
-ok $j[0], qr/Resque/;
+ok $j[0], qr/message/;
 
-$j = $r->pop_job('test', {class=>'Resque', args=>[]});
+$m = $r->pop_queue('test');
 #print Dumper($j);
-ok $j->{class}, 'Resque';
+ok $m, 'message';
 
 $r->drop_queue('test');
 ok $r->redis->exists($r->queue('test')), 0;
 
 # Test Resque::Worker~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 $w = new Resque::Worker(namespace=>'test', queues=>'test');
-ok $w->to_s, qr/^[\w\.]+:\d+:test$/;
+$n = $w->to_s;
+ok $n, qr/^[\w\.]+:\d+:test$/;
+print 'w=', join(' ', $r->redis->smembers($r->key('workers'))), "\n";
+ok $r->redis->sismember($r->key('workers'),$n), 1;
 
 $w->destroy;
 
