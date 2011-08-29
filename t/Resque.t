@@ -10,11 +10,17 @@ use warnings;
 use lib './lib';
 
 package ResqueTestJob;
+sub new {
+  my $class = shift;
+  my $self = {@_};
+  bless $self, $class;
+}
 sub process { 
   print "Args: @_\n";
   return $_[0]||1;
 }
 1;
+
 package main;
 
 use Test;
@@ -30,9 +36,10 @@ use Data::Dumper;
 # Insert your test code below, the Test::More module is use()ed here so read
 # its man page ( perldoc Test::More ) for help writing this test script.
 
-my ($r,$j,$p, @j, @w, $w,$m, $n);
+my ($r,$j,$p, @j, @w, $w,$m, $n, @a);
 
 # Test Resque
+###$r = new Resque(); $r->drop_all(); # Warning: destroys resque namespace
 ok $r = new Resque(namespace=>'test');
 $r->drop_all();
 ok $r->queue('test'), "test:queue:test";
@@ -48,13 +55,24 @@ ok $m, 'message';
 $r->drop_queue('test');
 ok $r->redis->exists($r->queue('test')), 0;
 
-# Test Resque::Worker~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-$w = new Resque::Worker(namespace=>'test', queues=>'test');
+# Test Resque::Job ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#$j = Resque::Job::create($r, new ResqueTestJob(), 1, "asdf", {a=>1}, {resque=>$r});
+$j = $r->create_job(new ResqueTestJob(), 1, "asdf", {a=>1}, 0);
+#print Dumper($j);
+ok $j->queue('test'), 'test:queue:test';
+@a  = $j->args;
+ok $a[1], 'asdf';
+
+
+# Test Resque::Worker ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+$w = new Resque::Worker(namespace=>'test', queues=>'ResqueTestJob', shutdown_on_empty=>0);
 $n = $w->to_s;
 ok $n, qr/^[\w\.]+:\d+:test$/;
-print 'w=', join(' ', $r->redis->smembers($r->key('workers'))), "\n";
+#print 'w=', join(' ', $r->redis->smembers($r->key('workers'))), "\n";
 ok $r->redis->sismember($r->key('workers'),$n), 1;
 
+$w->work;
+print "end of worker\n";
 $w->destroy;
 
 

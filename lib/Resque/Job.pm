@@ -36,9 +36,9 @@ my $to_s;
 
 sub new {
   my ($class, $queue, $payload, %config) = @_;
-  my %job = $payload ? decode_json($payload) : ();
-  my $self = $config{resque} || new Resque(
-    queue=>$queue, payload=>$payload, job=>%job, %config);
+  my $job = $payload ? decode_json($payload) : {};
+  my $self = {queue=>$queue, payload=>$payload, job=>$job, %config};
+  $self = $config{resque} ? {%{$config{resque}},%$self} : new Resque(%$self);
   bless $self, $class;
 }
 
@@ -47,11 +47,27 @@ sub job_string {
   encode_json({class=>$klass, args=>\@args});
 }
 
-# Creates a Job my placing it on a queue. 
+sub to_s {
+  my ($self) = @_;
+  encode_json($self->{job});
+}
+
+# Creates a Job my placing it on a queue. Resque::Job::create(Class, *args..., {opt=>value,...})
 sub create {
   my ($resque, $klass, @args) = @_;
+  my $opt = ref($args[-1]) eq 'HASH' ? pop(@args) : {};
   return perform($klass, @args) if $resque->inline;
-  $resque->push_queue(encode_json({class=>$klass, args=>\@args}));
+  $klass = ref($klass) if ref($klass);
+  my $queue = $opt->{queue} || "$klass";
+  my $job = new Resque::Job($queue, job_string($klass, @args), resque=>$resque, %$opt);
+  $job->enqueue();
+  $job;
+}
+
+sub enqueue {
+  my ($self, $queue) = @_;
+  $queue ||= $self->{queue};
+  $self->push_queue($queue, $self->to_s);
 }
 
 # Removes all matching jobs from the queue, returns number of destroyed jobs
@@ -74,13 +90,14 @@ sub destroy {
 # Returns a job instance from the queue, or undef if none available
 sub reserve {
   my ($resque, $queue) = @_;
-  my $payload = $resque->redis->pop_queue($queue);
+  my $payload = $resque->pop_queue($queue);
+  print "$queue pl:", $payload||'none', "\n";
   return undef unless $payload;
-  new Resque::Job($queue, $payload);
+  new Resque::Job($queue, $payload, resque=>$resque);
 }
 
 sub args {
-  @{$_[0]->{args}||[]};
+  @{$_[0]->{job}{args}||[]};
 }
 
 sub perform {
@@ -99,6 +116,7 @@ sub perform {
 
 sub fail {
   my ($self, $exception) = @_;
+  print "job failed :-( $exception\n";
   Resque::Failure::create(payload=>$self->{payload}, exception=>$exception, 
     worker=>$self->{worker}, queue=>$self->{queue}, retries=>$self->{retries}||0);
 }

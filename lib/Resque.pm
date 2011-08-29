@@ -47,6 +47,18 @@ sub redis {
   $self->{redis};
 }
 
+# Convenience method to return a new job on this resque system
+sub create_job {
+  my ($self, $klass, @args) = @_;
+  Resque::Job::create($self, $klass, @args);
+}
+
+# Convenience method to return a new worker on this resque system
+sub new_worker {
+  my ($self, %config) = @_;
+  new Resque::Worker(resque=>$self, %config);
+}
+
 # Used to decide to inline processing (testing) or queue the request
 sub inline {
   my ($self) = @_;
@@ -56,6 +68,7 @@ sub inline {
 sub key {
   my ($self, @names) = @_;
   my $name = join(':', @names);
+  warn "namespace! @names ... ".join(',',caller) if $self->{namespace} eq 'resque'; ### TESTING
   "$self->{namespace}:$name";
 }
 
@@ -127,7 +140,7 @@ sub drop_keys {
   my ($self, @names) = @_;
   my @k = $self->redis->keys($self->key(@names,"*"));
   foreach (@k) {
-    print "killing $_\n";
+    print "deleting key $_\n";
     $self->redis->del($_);
   }
 }
@@ -167,7 +180,7 @@ sub now {
 sub logger {
   my ($self, $process, @msg) = @_;
   my $logrec = join("\t", now(), $process, @msg);
-  my $logfile = $self->{logfile} || "$process.log";
+  my $logfile = $self->{logfile} || $ENV{RESQUE_LOG} || "$process.log";
   open(my $lh, ">>", $logfile);
   return print $lh "$logrec\n" unless $lh;
   print $lh "$logrec\n";

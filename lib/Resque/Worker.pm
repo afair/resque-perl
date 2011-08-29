@@ -36,9 +36,8 @@ my $to_s;
 
 sub new {
   my ($class, %config) = @_;
-  my $self = $config{resque} || new Resque(
-    verbose=>0, queues=>$ENV{QUEUES}||'*', state=>'idle',
-    %config);
+  my $self = {verbose=>0, queues=>$ENV{QUEUES}||'*', state=>'idle', %config};
+  $self = $config{resque} ? {%{$config{resque}},%$self} : new Resque(%$self);
   bless $self, $class;
   $self->register_worker();
   $self;
@@ -82,8 +81,11 @@ sub unregister_worker {
 sub reserve {
   my ($self) = @_;
   my @q = $self->{queues} eq '*' ? sort $self->queues() : split(',',$self->{queues});
+  print join(' ', @q), "= queues\n";
   foreach (@q) {
+    print "q: $_\n";
     $self->{job} = Resque::Job::reserve($self, $_);
+    print $self->{job}, " in $_\n" if $self->{job};
     return $self->{job} if $self->{job};
   }
 }
@@ -125,18 +127,18 @@ sub register_signal_handlers {
   $SIG{USR1} = sub { $self->kill_child("Caught USR1") };
   $SIG{USR2} = sub { $self->pause_processing("Caught USR2") };
   $SIG{CONT} = sub { $self->unpause_processing("Caught CONT") };
-  $SIG{__DIE__} = sub { 
-    return if $self->{died};
-    if ($self->{child} && $self->{child} == $$) { # I'm a child
-      ++$self->{died};
-      $self->logger("Child died...",  @_);
-      exit 255;
-    }
-    else { # Master died. WTF?
-      $self->logger("Master died...",  @_);
-      exit 255;
-    }
-  };
+#   $SIG{__DIE__} = sub { 
+#     return if $self->{died};
+#     if ($self->{child} && $self->{child} == $$) { # I'm a child
+#       ++$self->{died};
+#       $self->logger("Child died...",  @_);
+#       exit 255;
+#     }
+#     else { # Master died. WTF?
+#       $self->logger("Master died...",  @_);
+#       exit 255;
+#     }
+#   };
 }
 
 sub work {
@@ -144,30 +146,49 @@ sub work {
   $self->redis->sadd($self->key('workers'), $self->to_s);
   $self->redis->set($self->key('stat', 'processed', $self->to_s), "0");
   $self->register_signal_handlers();
+  print "starting\n";
 
   while(!$self->shutdown_requested) {
+    print "loop\n";
+    print "paused\n" if $self->paused;
     if (!$self->paused && $self->reserve()) {
+      print "job: $self->{job}{class}\n";
+      my $rc;
       $self->working_on();
       $self->{child} = fork();
       $self->shutdown("Fork failed!") unless defined $self->{child};
 
       if ($self->{child} == 0) { # Child!
+        print "child $$\n";
         srand;
-        my $rc = &$self->{job}->perform();
+        if ($self->{process}) {
+          $rc = &{$self->{callback}}($self->job->args());
+        } else {
+          $rc = $self->{job}->perform();
+        }
         $self->status('processed');
         exit $rc;
       } 
       else { # Me, $self->{child} is the child pid
+        print "waiting for  $self->{child}\n";
         my $cpid = wait();
+        print "joined with $$self->{child} $cpid\n";
         $self->logger("Lost my child! Sad Parent!") if $cpid == -1;
       }
       $self->{child} = 0;
       $self->done_working();
     } 
+    elsif ($self->{shutdown_on_empty}) {
+        $self->shutdown();
+    } 
     else {
+      print "sleeping...\n";
       sleep($self->{interval} || 5);
     }
+    print "shutdown_requested\n" if $self->shutdown_requested;
   }
+
+  print "stopping\n";
   $self->redis->srem($self->key('workers'), $self->to_s);
   $self->redis->del($self->key('stat', 'processed', $self->to_s));
 }
@@ -176,7 +197,7 @@ sub work {
 sub working_on {
   my ($self, $job) = @_;
   $job ||= $self->{job};
-  my $v = {queue=>$self->{queue}, run_at=>Resque::now(), payload=>$job};
+  my $v = {queue=>$self->{queue}, run_at=>Resque::now(), payload=>$job->{payload}};
   $self->redis->set($self->key('worker',$self->to_s), encode_json($v));
 }
 
@@ -251,6 +272,7 @@ sub kill_child {
 
 sub child_process_info {
   my $self = shift;
+  return '' unless $self->{child};
   my $info = `ps -o pid,state -p $self->{child}`;
   return undef if $?; # Not found
   chomp $info;
