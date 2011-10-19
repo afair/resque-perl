@@ -1,18 +1,26 @@
-Resque version 0.01
+Resque-Perl version 0.01
 ===================
 
-The README is used to introduce the module and provide instructions on
-how to install the module, any machine dependencies it may have (for
-example C compilers and installed libraries) and any other information
-that should be provided before the module is installed.
+Resque-Perl is a more-or-less straight port of Resque from Ruby to Perl. 
+Resque (https://github.com/defunkt/resque), "is a Redis-backed library for creating 
+background jobs, placing those jobs on multiple queues, and processing them later"
 
-A README file is required for CPAN modules since CPAN extracts the
-README file from a module distribution so that people browsing the
-archive can use it get an idea of the modules uses. It is usually a
-good idea to provide version information here so that people can
-decide whether fixes for the module are worth downloading.
+Resque utilizes Redis. (http://redis.io/) "Redis is an open source, advanced key-value store. 
+It is often referred to as a data structure server since keys can contain strings, 
+hashes, lists, sets and sorted sets." Resque is not a flash-in-the-pan NoSQL datastore,
+but offers a real solution, particularly to fast-access and transient data.
+
+I created this port in order to interoperate between Perl and Ruby systems. The
+design of Resque is more Ruby-centric, and I have relaxed the protocol in order for
+Perl to easily create and process queues.
+
 
 INSTALLATION
+
+First, you need Redis (http://redis.io/) installed and running. Queue data is stored 
+in Redis, and you may want to configure Redis for your particular persistence needs.
+
+You do not need Ruby or Resque to use Resque-Perl, but they should work together.
 
 To install this module type the following:
 
@@ -26,6 +34,13 @@ DEPENDENCIES
 This module requires these other modules and libraries:
 
   Test
+
+THANK YOUS
+
+Thanks to the great team at Github for creating Resque, a powerful, elegant queueing solution
+where AMQP-based queues may be overkill.
+
+
 
 COPYRIGHT AND LICENCE
 
