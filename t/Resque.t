@@ -18,12 +18,6 @@ use Resque::Worker;;
 use Resque::Job;
 use Data::Dumper;
 
-#ok(1); # If we made it this far, we're ok.
-#########################
-
-# Insert your test code below, the Test::More module is use()ed here so read
-# its man page ( perldoc Test::More ) for help writing this test script.
-
 # Test Resque ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ###$r = new Resque(); $r->drop_all(); # Warning: destroys resque namespace
 ok $r = new Resque(namespace=>'test');

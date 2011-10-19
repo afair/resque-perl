@@ -217,22 +217,61 @@ sub logger {
 __END__
 # Below is stub documentation for your module. You'd better edit it!
 
-=head1 NAME
+=head1 Resque
 
-Resque - Perl extension for blah blah blah
+Resque - Perl port of the Resque Queue by Github. Ported from Ruby
+for use as a standalone Queuing solution or for integration with Ruby or
+other Resque systems.
 
 =head1 SYNOPSIS
 
   use Resque;
-  blah blah blah
+
+  # Create a resque object for working. The namespace defaults to "resque"
+  $r = new Resque(namespace=>'myqueue');
+
+  # Raw Queue operationsw
+  $r->push_queue('test', 'message'); # Writes raw job/message to queue
+  @j = $r->peek('test'); # Returns the jobs in the queue
+  $m = $r->pop_queue('test'); # Returns next available job/message
+  $r->drop_queue('test'); # Destroys all data in the queue
+
+  # Resque Jobs are objects and parameters
+  $j = $r->create_job(new ResqueTestJob(), 1, "asdf", {a=>1}, 0);
+
+  # Resque Workers dequeue jobs and process them
+  $w = new Resque::Worker(namespace=>'myqueue', queues=>'ResqueTestJob', 
+    shutdown_on_empty=>1, test=>1);
+  $w->work;
+  $w->destroy;
+
+  # The worker invokes Module::perform(@arguments) for each job in the queue
+  package ResqueTestJob; 
+  my $callback = sub {};
+  sub new {
+    my $class = shift; my $self = {};
+    bless $self, $class;
+  }
+  sub perform {  # Class method!
+    my (@args) = @_;
+    print "Args: @args\n";
+  }
+  1;
+
+  # Alternate worker implementation, takes a closure to run each job
+  $j = $r->create_job(new ResqueTestJob(), 'hello, queue');
+  $w = $r->new_worker(queues=>'ResqueTestJob', shutdown_on_empty=>1, test=>1,
+    callback=> sub { print "Worker callback: @_\n"; });
+  $w->work;
+  $w->destroy;
+
 
 =head1 DESCRIPTION
 
-Stub documentation for Resque, created by h2xs. It looks like the
-author of the extension was negligent enough to leave the stub
-unedited.
-
-Blah blah blah.
+Resque acts like the Ruby version of the same name. A process can enqueue a job
+onto a named resque queue. One or more workers can run to dequeue a job from the
+queue(s) and execute them. The benefit of the Queuing system is that long-running
+jobs can be performed asynchronously, or executed on another computer or application.
 
 =head2 EXPORT
 
@@ -242,14 +281,9 @@ None by default.
 
 =head1 SEE ALSO
 
-Mention other useful documentation such as the documentation of
-related modules or operating system documentation (such as man pages
-in UNIX), or any relevant external documentation such as RFCs or
-standards.
+Resque at https://github.com/defunkt/resque
 
-If you have a mailing list set up for your module, mention it here.
-
-If you have a web site set up for your module, mention it here.
+Redis at http://redis.io/
 
 =head1 AUTHOR
 
