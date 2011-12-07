@@ -20,7 +20,6 @@ use Data::Dumper;
 
 # Test Resque ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ###$r = new Resque(); $r->drop_all(); # Warning: destroys resque namespace
-ok $r = new Resque(namespace=>'test');
 $r->drop_all();
 ok $r->queue('test'), "test:queue:test";
 ok $r->push_queue('test', 'message');

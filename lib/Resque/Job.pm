@@ -4,10 +4,11 @@ use 5.006000;
 use strict;
 use warnings;
 
-use JSON::XS;
+use JSON; #::XS;
 #use lib "$ENV{HOME}/src/Resque";
-use Resque;
+#use Resque;
 use Resque::Failure;
+use Data::Dumper;
 
 require Exporter;
 
@@ -42,11 +43,14 @@ sub new {
   bless $self, $class;
 }
 
+# Returns the JSON-encoded string of the job message:
+#   "{class:'classname', args:['arg1',...]}
 sub job_string {
   my ($klass, @args) = @_;
-  encode_json({class=>$klass, args=>\@args});
+  encode_json({class=>$klass, args=>\@args, queued_at=>time(), tries=>0});
 }
 
+# Returns a JSON string serializing this Job instance with data.
 sub to_s {
   my ($self) = @_;
   encode_json($self->{job});
@@ -96,6 +100,7 @@ sub reserve {
 }
 
 sub args {
+  #print Dumper(@_);
   @{$_[0]->{job}{args}||[]};
 }
 
@@ -117,7 +122,7 @@ sub perform {
 
 sub fail {
   my ($self, $exception) = @_;
-  print "job failed :-( $exception\n";
+  #print "job failed :-( $exception\n";
   Resque::Failure::create(payload=>$self->{payload}, exception=>$exception, 
     worker=>$self->{worker}, queue=>$self->{queue}, retries=>$self->{retries}||0);
 }

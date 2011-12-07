@@ -5,8 +5,10 @@ use strict;
 use warnings;
 
 use Redis;
+#use lib "$ENV{HOME}/src/resque-perl/lib";
+use JSON; #::XS;
 use Resque::Worker;
-use JSON::XS;
+#use Resque::Job;
 
 require Exporter;
 
@@ -78,9 +80,11 @@ sub keys {
   $self->redis->keys($self->key(@names,"*"));
 }
 
+# Returns the key for the queue name (base:queue:name:...)
 sub queue {
-  my ($self, $name) = @_;
-  $self->key("queue", $name);
+  my ($self, @name) = @_;
+  @name = @{$name[0]} if ref($name[0]) eq 'ARRAY';
+  $self->key("queue", @name);
 }
 
 # Adds a job item to the named queue
@@ -126,6 +130,11 @@ sub peek {
   @jobs;
 }
 
+sub queue_size {
+  my ($self, $queue) = @_;
+  $self->redis->llen($self->queue($queue));
+}
+
 sub queues {
   my ($self) = @_;
   $self->redis->smembers($self->key("queues"));
@@ -152,7 +161,8 @@ sub drop_queue {
   my $name = $self->queue($queue);
   $self->{watched_queues} ||= {};
   delete $self->{watched_queues}{$name};
-  $self->redis->srem($self->key("queues"), $self->queue($name));
+  $self->redis->srem($self->key("queues"), $name);
+  print "drop name=$name\n";
   $self->redis->del($name);
 }
 
@@ -211,11 +221,41 @@ sub logger {
   close $lh;
 }
 
+###############################################################################
+# Cron: Stores a queue message inserted at a given time
+# Works with a ISO timestamp: YYYY-MM-DD hh:mm:ss.... or epoch
+###############################################################################
+
+# Allows to simple time-based scheduling. It prefers an ISO timestamp, but an 
+# epoch will work. At the give, time  (or as soon afterwards as check_cron is 
+# called), will insert the msg into the named queue.
+sub at_time_do {
+  my ($self, $timestamp, $queue, $msg) = @_;
+  my $score = substr($timestamp,0,19);
+  $timestamp  =~ s/\D//;
+  $self->redis->zadd('cron', $score, to_json([$timestamp, $queue, $msg]));
+}
+
+# Call check_cron every so often. If a job is ready for running, it will be
+# removed from the cron sorted set and pushed into the given queue. The now
+# timestamp defaults to the epoch time, so provide it if you are using ISO, etc.
+sub check_cron {
+  my ($self, $now) = @_;
+  $now = substr($now||time(),0,19);
+  $now  =~ s/\D//;
+  while (my ($member, $score) = $self->redis->zrange('cron', 0, 0, 'withscores')) {
+    return if $score > $now;
+    my ($timestamp, $queue, $msg) = @{from_json($member)};
+    $self->redis->zrem('cron', $member);
+    $self->push_queue($queue, $msg);
+  }
+}
+
+
 # Preloaded methods go here.
 
 1;
 __END__
-# Below is stub documentation for your module. You'd better edit it!
 
 =head1 Resque
 
@@ -230,7 +270,7 @@ other Resque systems.
   # Create a resque object for working. The namespace defaults to "resque"
   $r = new Resque(namespace=>'myqueue');
 
-  # Raw Queue operationsw
+  # Raw Queue operations
   $r->push_queue('test', 'message'); # Writes raw job/message to queue
   @j = $r->peek('test'); # Returns the jobs in the queue
   $m = $r->pop_queue('test'); # Returns next available job/message
@@ -265,6 +305,8 @@ other Resque systems.
   $w->work;
   $w->destroy;
 
+  # Use a Time trigger to run a job later
+  $r->at_time_do(time()+3600, 'test', 'message');
 
 =head1 DESCRIPTION
 
@@ -281,13 +323,13 @@ None by default.
 
 =head1 SEE ALSO
 
-Resque at https://github.com/defunkt/resque
+Resque at L<https://github.com/defunkt/resque>
 
-Redis at http://redis.io/
+Redis at L<http://redis.io/>
 
 =head1 AUTHOR
 
-Allen Fair, E<lt>allen@nonetE<gt>
+Allen Fair, L<htts://github.com/afair>
 
 =head1 COPYRIGHT AND LICENSE
 

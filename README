@@ -35,10 +35,12 @@ This module requires these other modules and libraries:
 
   Test
 
-THANK YOUS
+THANK YOU'S
 
 Thanks to the great team at Github for creating Resque, a powerful, elegant queueing solution
 where AMQP-based queues may be overkill.
+
+Also thanks to the developers of the Redis key-value store.
 
 
 

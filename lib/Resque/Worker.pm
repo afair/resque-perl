@@ -4,8 +4,8 @@ use 5.006000;
 use strict;
 use warnings;
 
-use Redis;
-use JSON::XS;
+use JSON; #::XS;
+use Resque::Job;
 
 require Exporter;
 
@@ -29,11 +29,13 @@ our @EXPORT = qw(
 );
 
 our $VERSION = '0.01';
+our $RETRY_EXIT_CODE = 111;
 
 my $hostname;
 my %workers=();
 my $to_s;
 
+use Data::Dumper;
 sub new {
   my ($class, %config) = @_;
   my $self = {verbose=>0, queues=>$ENV{QUEUES}||'*', state=>'idle', %config};
@@ -55,18 +57,35 @@ sub hostname {
   $hostname;
 }
 
+# Names the worker: hostname:pid:queue,queue,....
 sub to_s {
   my ($self) = @_;
   $to_s ||= join(":", hostname(), $$, join(',',$self->{queues}));
 }
 
+sub set {
+  my ($self, $key, $value) = @_;
+  $self->redis->set($self->key($key, $self->to_s), $value);
+}
+
+sub increment {
+  my ($self, $key, $by) = @_;
+  $self->redis->incrby($self->key($self->to_s(), $key), $by||1);
+}
+
+# Sets up data structures for worker:
+#   base:workers                                 set(worker names)
+#   base:processed                               0 
+#   base:worker:hostname:pid:queue,queue:started time
+#   base:worker:hostname:pid:queue,queue         current job (set when job selected)
 sub register_worker {
   my ($self) = @_;
   $self->prune_dead_workers();
   $workers{$self->to_s} = $self;
   $self->redis->sadd($self->key('workers'), $self->to_s);
-  $self->redis->set($self->key('processed', $self->to_s), '0');
-  $self->redis->set($self->key('worker', $self->to_s, 'started'), $self->now());
+  $self->set('processed', '0');
+  $self->set('failures',  '0');
+  $self->set('started', $self->now());
 }
 
 sub unregister_worker {
@@ -154,6 +173,7 @@ sub work {
   $self->redis->sadd($self->key('workers'), $self->to_s);
   $self->redis->set($self->key('stat', 'processed', $self->to_s), "0");
   $self->register_signal_handlers();
+  $self->check_cron();
 
   while(!$self->shutdown_requested) {
     if (!$self->paused && $self->reserve()) {
@@ -175,16 +195,29 @@ sub work {
       } 
       else { # Me, $self->{child} is the child pid
         my $cpid = wait();
-        $self->logger("Lost my child! Sad Parent!") if $cpid == -1;
+        #print "*** CHILD COMPLETE $cpid, $?\n";
+        $self->{child_exit} = $?;
+        if ($? == $RETRY_EXIT_CODE) {
+          $self->fail_job("Retry Requested $?");
+        }
+        elsif ($? > 1) {
+          $self->fail_job("Unknown Exit Error $?");
+        } 
+        elsif ($cpid == -1) {
+          $self->logger("Lost my child! Sad Parent!") if $cpid == -1;
+        }
       }
       $self->{child} = 0;
       $self->done_working();
     } 
     elsif ($self->{shutdown_on_empty}) {
+      #print "===== EMPTY\n";
       $self->shutdown();
     } 
     else {
+      #print "===== SLEEP\n";
       sleep($self->{interval} || 5);
+      $self->check_cron();
     }
   }
 }
@@ -242,17 +275,16 @@ sub done_working {
 sub fail_job {
   my ($self, $exception) = @_;
   my $job ||= $self->{job};
-  my $v = JSON::encode_json({queue=>$self->{queue}, run_at=>Resque::now(),
-    payload=>$job, exception=>$exception, worker=>$self->to_s,
-    failed_at=>Resque::now()});
-  $self->redis->rpush("resque:failed", $v);
-  $self->redis->incrby("resque:stat:failed:$self->{worker}", 1);
-  $self->redis->incrby("resque:stat:failed", 1);
+  my $v = JSON::encode_json({%$job, queue=>$self->{queue}, run_at=>Resque::now(),
+    exception=>$exception, worker=>$self->to_s, failed_at=>Resque::now()});
+  $self->increment('failures');
+  $self->redis->incrby($self->key("stat:failed:$self->{worker}"), 1);
+  $self->redis->incrby($self->key("stat:failed"), 1);
 }
 
 sub retry_queue {
   my ($self, $queue) = @_;
-  while (my $obj = $self->dequeue_job("resque:queue:$self->{queue}")) {
+  while (my $obj = $self->dequeue_job($self->queue($self->{queue}))) {
     $self->queue_job($queue, $obj);
   }
 }
