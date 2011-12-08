@@ -352,7 +352,7 @@ sub vlog {
 # Appends message to log file
 sub logger {
   my ($self, @msg) = @_;
-  Resque::logger($self, $self->to_s(), @msg);
+  Resque::logger($self, $ENV{WORKER_LOGFILE}||$self->to_s(), @msg);
 }
 
 
