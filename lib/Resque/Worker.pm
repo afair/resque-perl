@@ -4,7 +4,7 @@ use 5.006000;
 use strict;
 use warnings;
 
-use JSON; #::XS;
+use JSON;
 use Resque::Job;
 
 require Exporter;
@@ -38,7 +38,12 @@ my $to_s;
 use Data::Dumper;
 sub new {
   my ($class, %config) = @_;
-  my $self = {verbose=>0, queues=>$ENV{QUEUES}||'*', state=>'idle', %config};
+  if (exists($config{queues}) && ref($config{queues}) ne 'ARRAY') {
+    $config{queues} = [split(/[\s\,]/, $config{queues}||$ENV{QUEUES}||'*')];
+  }
+  my $self = {verbose=>0, 
+    queues=>[$ENV{QUEUES}||'*'], 
+    state=>'idle', %config};
   $self = $config{resque} ? {%{$config{resque}},%$self} : new Resque(%$self);
   bless $self, $class;
   $self->register_worker();
@@ -60,7 +65,7 @@ sub hostname {
 # Names the worker: hostname:pid:queue,queue,....
 sub to_s {
   my ($self) = @_;
-  $to_s ||= join(":", hostname(), $$, join(',',$self->{queues}));
+  $to_s ||= join(":", hostname(), $$, join(',',@{$self->{queues}}));
 }
 
 sub set {
@@ -99,8 +104,8 @@ sub unregister_worker {
 # Returns the next job from the subscribed queues
 sub reserve {
   my ($self) = @_;
-  my @q = $self->{queues} eq '*' ? sort $self->queues() : split(',',$self->{queues});
-  foreach (@q) {
+  #my @q = $self->{queues} eq '*' ? sort $self->queues() : split(',',@{$self->{queues}});
+  foreach (@{$self->{queues}}) {
     $self->{job} = Resque::Job::reserve($self, $_);
     return $self->{job} if $self->{job};
   }
@@ -177,39 +182,39 @@ sub work {
 
   while(!$self->shutdown_requested) {
     if (!$self->paused && $self->reserve()) {
-      my $rc;
+      my $rc = 0;
       $self->working_on();
-      $self->{child} = fork();
-      $self->shutdown("Fork failed!") unless defined $self->{child};
 
-      if ($self->{child} == 0) { # Child!
-        srand;
-        # Send job to a configired callback, or let the job do it.
-        if ($self->{callback}) {
-          $rc = &{$self->{callback}}($self->{job}->args());
-        } else {
-          $rc = $self->{job}->perform();
-        }
-        $self->status('processed');
-        exit $rc;
-      } 
-      else { # Me, $self->{child} is the child pid
-        my $cpid = wait();
-        #print "*** CHILD COMPLETE $cpid, $?\n";
-        $self->{child_exit} = $?;
-        if ($? == $RETRY_EXIT_CODE) {
-          $self->fail_job("Retry Requested $?");
-        }
-        elsif ($? > 1) {
-          $self->fail_job("Unknown Exit Error $?");
-        } 
-        elsif ($cpid == -1) {
-          $self->logger("Lost my child! Sad Parent!") if $cpid == -1;
-        }
+      if ($self->{no_fork}) {
+        $rc = $self->execute_job();
       }
-      $self->{child} = 0;
-      $self->done_working();
-    } 
+      else {
+        $self->{child} = fork();
+        $self->shutdown("Fork failed!") unless defined $self->{child};
+
+        if ($self->{child} == 0) { # Child!
+          srand;
+          $rc = $self->execute_job();
+          exit ($rc ? $rc : 0);
+        }
+        else { # Me, $self->{child} is the child pid
+          my $cpid = wait();
+          #print "*** CHILD COMPLETE $cpid, $?\n";
+          $self->{child_exit} = $?;
+          if ($? == $RETRY_EXIT_CODE) {
+            $self->fail_job("Retry Requested $?");
+          }
+          elsif ($? > 1) {
+            $self->fail_job("Unknown Exit Error $?");
+          } 
+          elsif ($cpid == -1) {
+            $self->logger("Lost my child! Sad Parent!") if $cpid == -1;
+          }
+        }
+        $self->{child} = 0;
+        $self->done_working();
+      }
+    }
     elsif ($self->{shutdown_on_empty}) {
       #print "===== EMPTY\n";
       $self->shutdown();
@@ -220,6 +225,22 @@ sub work {
       $self->check_cron();
     }
   }
+}
+
+
+sub execute_job {
+  my ($self) = @_;
+  my $rc = 0;
+  # Send job to a configired callback, or let the job do it.
+  if ($self->{callback}) {
+    $rc = &{$self->{callback}}($self->{job}->args());
+  } elsif ($self->{callback_with_job}) {
+    $rc = &{$self->{callback_with_job}}($self->{job}, $self->{job}->args());
+  } else {
+    $rc = $self->{job}->perform();
+  }
+  $self->status('processed');
+  $rc;
 }
 
 # Log Process Worker: reads base:logs:logname and writes lines to given logname

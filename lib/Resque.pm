@@ -5,8 +5,7 @@ use strict;
 use warnings;
 
 use Redis;
-#use lib "$ENV{HOME}/src/resque-perl/lib";
-use JSON; #::XS;
+use JSON;
 use Resque::Worker;
 #use Resque::Job;
 
@@ -44,8 +43,9 @@ sub new {
 sub redis {
   my $self = shift;
   unless ($self->{redis}) {
-    my $server = $self->{config}{server}||'127.0.0.1:6379';
+    my $server = $self->{server}||'127.0.0.1:6379';
     $self->{redis} = Redis->new(server=>$server) or die "Can not connect to Redis: $server";
+    $self->{redis}->select($self->{database}) if $self->{database};
   }
   $self->{redis};
 }
@@ -214,11 +214,35 @@ sub logger {
   my $logrec = join("\t", now(), $process, @msg);
   return print "$logrec\n" if $self->{test};
 
-  my $logfile = $self->{logfile} || $ENV{RESQUE_LOG} || "$process.log";
+  my $logfile = $self->{logfile} || $ENV{RESQUE_LOG} || $process;
   open(my $lh, ">>", $logfile);
   return print $lh "$logrec\n" unless $lh;
   print $lh "$logrec\n";
   close $lh;
+}
+
+###############################################################################
+# A "Signal Queue" has one entry per name (like a queue).
+# It will process a waiting batch when you don't need multiple jobs triggered.
+# It is implemented as a Redis Set with the queue name of "signals".
+###############################################################################
+
+# Signal the name to be run at the next cycle
+sub set_signal {
+  my ($self, @name) = @_;
+  $self->redis->sadd($self->queue('signals'), $self->queue(@name));
+}
+
+# Returns an array of signals to process
+sub signals {
+  my ($self) = @_;
+  $self->redis->smembers($self->queue('signals'));
+}
+
+# Call to unset the signal after processing the resource
+sub unset_signal {
+  my ($self, @name) = @_;
+  $self->redis->srem($self->queue('signals'), $self->queue(@name));
 }
 
 ###############################################################################

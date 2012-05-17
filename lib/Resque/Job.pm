@@ -4,8 +4,7 @@ use 5.006000;
 use strict;
 use warnings;
 
-use JSON; #::XS;
-#use lib "$ENV{HOME}/src/Resque";
+use JSON;
 #use Resque;
 use Resque::Failure;
 use Data::Dumper;
@@ -47,7 +46,8 @@ sub new {
 #   "{class:'classname', args:['arg1',...]}
 sub job_string {
   my ($klass, @args) = @_;
-  encode_json({class=>$klass, args=>\@args, queued_at=>time(), tries=>0});
+  my $opt = ref($args[-1]) eq 'HASH' ? pop(@args) : {};
+  encode_json({class=>$klass, args=>\@args, queued_at=>time(), tries=>0, options=>$opt});
 }
 
 # Returns a JSON string serializing this Job instance with data.
@@ -63,7 +63,7 @@ sub create {
   return perform($klass, @args) if $resque->inline;
   $klass = ref($klass) if ref($klass);
   my $queue = $opt->{queue} || "$klass";
-  my $job = new Resque::Job($queue, job_string($klass, @args), resque=>$resque, %$opt);
+  my $job = new Resque::Job($queue, job_string($klass, @args, $opt), resque=>$resque);
   $job->enqueue();
   $job;
 }
@@ -79,7 +79,7 @@ sub destroy {
   my ($resque, $queue, $klass, @args) = @_;
   my $destroyed=0;
   if (@args) {
-    $destroyed = $resque->redis->lrem($resque->key('queue', $queue), 0, job_string($klass, @args));
+    $destroyed = $resque->redis->lrem($resque->key('queue', $queue), 0, job_string($klass, @args, {}));
   }
   else {
     my @payloads = $resque->redis->lrange($resque->key('queue', 0, -1));
